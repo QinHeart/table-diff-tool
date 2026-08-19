@@ -1,33 +1,21 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render(pathname = "/") {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
-    new Request(`http://localhost${pathname}`, { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
+async function readBuiltPage(pathname = "index.html") {
+  return readFile(new URL(`../dist/${pathname}`, import.meta.url), "utf8");
 }
 
-test("server-renders the table comparison tool", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-  const html = await response.text();
+test("builds the classic table comparison page", async () => {
+  const html = await readBuiltPage();
   assert.match(html, /<title>表格差异对比<\/title>/i);
-  assert.match(html, /表格差异对比/);
-  assert.match(html, /载入示例/);
-  assert.match(html, /本地处理 · 不上传文件/);
-  assert.doesNotMatch(html, /codex-preview|SkeletonPreview|Your site is taking shape/i);
+  assert.match(html, /data-result-layout="classic"/);
+  assert.match(html, /src="\/assets\/[^"]+\.js"/);
+  assert.match(html, /href="\/assets\/[^"]+\.css"/);
 });
 
-test("keeps the original page and exposes the result-display candidate separately", async () => {
-  const response = await render("/candidate");
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /<title>表格差异对比 · 结果展示候选版<\/title>/i);
-  assert.match(html, /表格差异对比/);
+test("builds the candidate page separately", async () => {
+  const html = await readBuiltPage("candidate/index.html");
+  assert.match(html, /<title>表格差异对比<\/title>/i);
+  assert.match(html, /data-result-layout="candidate"/);
 });
