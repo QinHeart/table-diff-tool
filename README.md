@@ -2,6 +2,13 @@
 
 在浏览器本地比较两份 Excel、CSV 或 TSV 文件，快速找出新增、删除、字段变化和完全相同的记录。
 
+## 在线使用
+
+- [打开表格差异对比](https://qinheart.github.io/table-diff-tool/)
+- [打开适合大量数据的结果视图](https://qinheart.github.io/table-diff-tool/candidate/)
+
+上传的文件只在当前浏览器中读取，不会发送到 GitHub 或其他服务器。
+
 ## 当前功能
 
 - 上传或拖入新旧两份表格
@@ -34,5 +41,7 @@ npm run dev
 npm run lint
 npm test
 ```
+
+推送到 `main` 后，GitHub Actions 会自动构建并更新 GitHub Pages。
 
 表格读取和导出使用 [SheetJS Community Edition](https://docs.sheetjs.com/)；打包完成后，实际处理不依赖第三方上传服务。
