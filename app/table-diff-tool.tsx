@@ -1,10 +1,11 @@
 "use client";
 
-import { DragEvent, useMemo, useState } from "react";
+import { DragEvent, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import {
   CellRow,
   ComparisonResult,
+  DifferenceEntry,
   DifferenceStatus,
   buildExportRows,
   compareSheets,
@@ -28,6 +29,7 @@ interface WorkbookData {
 type Side = "before" | "after";
 type ResultLayout = "classic" | "candidate";
 type ResultFilter = "all" | "attention" | DifferenceStatus;
+type CandidateSort = "priority" | "key" | "changes";
 
 const STATUS_LABEL: Record<DifferenceStatus, string> = {
   changed: "有变化",
@@ -193,55 +195,78 @@ function shownValue(value: string) {
   return value || "（空）";
 }
 
-function CandidateResultItem({ entry, keyField }: { entry: ComparisonResult["entries"][number]; keyField: string }) {
+function rowNameFor(entry: DifferenceEntry) {
   const row = entry.after ?? entry.before;
-  const rowName = row?.["商品名称"] || row?.["名称"] || "";
-  const previewChanges = entry.status === "changed" ? entry.changes.slice(0, 2) : [];
+  return row?.["商品名称"] || row?.["名称"] || "";
+}
+
+function changedFieldSummary(entry: DifferenceEntry) {
+  if (entry.status === "duplicate") return "匹配列重复";
+  if (entry.status === "unchanged") return "—";
+  if (entry.status === "added") return "整行新增";
+  if (entry.status === "removed") return "整行删除";
+  const names = entry.changes.slice(0, 2).map((change) => change.field).join("、");
+  return entry.changes.length > 2 ? `${names} +${entry.changes.length - 2}` : names;
+}
+
+function DifferenceDrawer({
+  entry,
+  keyField,
+  onClose,
+}: {
+  entry: DifferenceEntry | null;
+  keyField: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!entry) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [entry, onClose]);
+
+  if (!entry) return null;
+  const rowName = rowNameFor(entry);
 
   return (
-    <details className={`candidate-result-item status-${entry.status}`}>
-      <summary>
-        <span className="candidate-item-main">
-          <span className="status-pill">{CANDIDATE_STATUS_LABEL[entry.status]}</span>
-          <code>{entry.key}</code>
-          <span className="candidate-description">
-            {rowName ? <strong>{rowName}</strong> : null}
-            <span>{describeDifference(entry)}</span>
-          </span>
-          <span className="candidate-disclosure">展开详情</span>
-        </span>
-
-        {previewChanges.length ? (
-          <span className="change-preview-list">
-            {previewChanges.map((change) => (
-              <span className="change-preview" key={change.field}>
-                <strong>{change.field}</strong>
-                <span className="preview-old">{shownValue(change.before)}</span>
-                <span className="preview-arrow" aria-hidden="true">→</span>
-                <span className="preview-new">{shownValue(change.after)}</span>
-              </span>
-            ))}
-            {entry.changes.length > previewChanges.length ? (
-              <span className="more-change-count">另有 {entry.changes.length - previewChanges.length} 项变化</span>
-            ) : null}
-          </span>
-        ) : null}
-      </summary>
-
-      <div className="change-table candidate-change-table">
-        {entry.status === "duplicate" ? (
-          <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
-        ) : entry.changes.length ? entry.changes.map((change) => (
-          <div className="change-row" key={change.field}>
-            <strong>{change.field}</strong>
-            <div><span>旧值</span><p className="detail-old">{shownValue(change.before)}</p></div>
-            <div><span>新值</span><p className="detail-new">{shownValue(change.after)}</p></div>
+    <div className="drawer-layer">
+      <button className="drawer-backdrop" type="button" aria-label="关闭差异详情" onClick={onClose} />
+      <aside className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-drawer-title">
+        <header className="drawer-header">
+          <div>
+            <span className={`status-pill status-pill-${entry.status}`}>{CANDIDATE_STATUS_LABEL[entry.status]}</span>
+            <h2 id="detail-drawer-title">{entry.key}</h2>
+            {rowName ? <p>{rowName}</p> : null}
           </div>
-        )) : (
-          <div className="duplicate-message">所选字段没有差异。</div>
-        )}
-      </div>
-    </details>
+          <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭详情">×</button>
+        </header>
+
+        <div className="drawer-summary">
+          <span>{keyField}</span>
+          <strong>{entry.key}</strong>
+          <p>{describeDifference(entry)}</p>
+        </div>
+
+        <div className="drawer-content">
+          {entry.status === "duplicate" ? (
+            <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
+          ) : entry.changes.length ? entry.changes.map((change) => (
+            <section className="drawer-change" key={change.field}>
+              <h3>{change.field}</h3>
+              <div className="drawer-values">
+                <div><span>旧值</span><p className="detail-old">{shownValue(change.before)}</p></div>
+                <span className="drawer-arrow" aria-hidden="true">→</span>
+                <div><span>新值</span><p className="detail-new">{shownValue(change.after)}</p></div>
+              </div>
+            </section>
+          )) : (
+            <div className="duplicate-message">所选字段没有差异。</div>
+          )}
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -260,6 +285,10 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
   const [error, setError] = useState("");
   const [loadingSide, setLoadingSide] = useState<Side | null>(null);
   const [exportMessage, setExportMessage] = useState("");
+  const [candidateSort, setCandidateSort] = useState<CandidateSort>("priority");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedEntry, setSelectedEntry] = useState<DifferenceEntry | null>(null);
 
   const beforeSheet = beforeBook?.sheets.find((sheet) => sheet.name === beforeSheetName) ?? null;
   const afterSheet = afterBook?.sheets.find((sheet) => sheet.name === afterSheetName) ?? null;
@@ -285,6 +314,14 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
     }
     setComparison(null);
     setFilter(defaultResultFilter);
+    setCurrentPage(1);
+    setSelectedEntry(null);
+  }
+
+  function changeCandidateFilter(nextFilter: ResultFilter) {
+    setFilter(nextFilter);
+    setCurrentPage(1);
+    setSelectedEntry(null);
   }
 
   async function handleFile(side: Side, file: File) {
@@ -329,6 +366,8 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
     setQuery("");
     setError("");
     setExportMessage("");
+    setCurrentPage(1);
+    setSelectedEntry(null);
   }
 
   function runComparison() {
@@ -351,6 +390,8 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
     setQuery("");
     setError("");
     setExportMessage("");
+    setCurrentPage(1);
+    setSelectedEntry(null);
     window.setTimeout(() => document.getElementById("comparison-results")?.scrollIntoView({ behavior: "smooth" }), 50);
   }
 
@@ -386,6 +427,8 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
       if (!normalizedQuery) return true;
       const haystack = [
         entry.key,
+        ...Object.values(entry.before ?? {}),
+        ...Object.values(entry.after ?? {}),
         ...entry.changes.flatMap((change) => [change.field, change.before, change.after]),
       ].join(" ").toLocaleLowerCase("zh-CN");
       return haystack.includes(normalizedQuery);
@@ -398,16 +441,34 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
         removed: 3,
         unchanged: 4,
       };
-      entries.sort((a, b) => priority[a.status] - priority[b.status]);
+      entries.sort((a, b) => {
+        if (candidateSort === "key") {
+          return a.key.localeCompare(b.key, "zh-CN", { numeric: true, sensitivity: "base" });
+        }
+        if (candidateSort === "changes") {
+          return b.changes.length - a.changes.length
+            || priority[a.status] - priority[b.status]
+            || a.key.localeCompare(b.key, "zh-CN", { numeric: true, sensitivity: "base" });
+        }
+        return priority[a.status] - priority[b.status]
+          || a.key.localeCompare(b.key, "zh-CN", { numeric: true, sensitivity: "base" });
+      });
     }
     return entries;
-  }, [comparison, filter, query, resultLayout]);
+  }, [candidateSort, comparison, filter, query, resultLayout]);
 
   const ready = Boolean(beforeSheet && afterSheet && keyField && selectedFields.length);
   const currentStep = comparison ? 3 : beforeSheet && afterSheet ? 2 : 1;
   const attentionCount = comparison
     ? comparison.summary.changed + comparison.summary.added + comparison.summary.removed + comparison.summary.issues
     : 0;
+  const attentionEntryCount = comparison
+    ? comparison.summary.changed + comparison.summary.added + comparison.summary.removed + comparison.summary.duplicate
+    : 0;
+  const totalPages = Math.max(1, Math.ceil(visibleEntries.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStart = (safeCurrentPage - 1) * pageSize;
+  const paginatedEntries = visibleEntries.slice(pageStart, pageStart + pageSize);
 
   return (
     <main className="app-shell">
@@ -561,7 +622,7 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
                       type="button"
                       key={status}
                       className={`candidate-metric status-${status} ${filter === status ? "is-selected" : ""}`}
-                      onClick={() => setFilter(status)}
+                      onClick={() => changeCandidateFilter(status)}
                     >
                       <span>{label}</span>
                       <strong>{count}</strong>
@@ -577,14 +638,14 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
               ) : null}
 
               <div className="candidate-guidance">
-                <strong>先看需要关注的内容</strong>
-                <span>修改项直接显示前两处“旧值 → 新值”，点击任意记录可查看完整详情。</span>
+                <strong>适合大量数据的查看方式</strong>
+                <span>每个 {keyField} 固定一行；先筛选和排序，再点击“查看”从右侧核对全部字段。</span>
               </div>
 
               <div className="result-toolbar candidate-toolbar">
                 <div className="filter-tabs candidate-filter-tabs" role="group" aria-label="结果筛选">
                   {([
-                    ["attention", `需要关注 ${attentionCount}`],
+                    ["attention", `需要关注 ${attentionEntryCount}`],
                     ["changed", `修改 ${comparison.summary.changed}`],
                     ["added", `新增 ${comparison.summary.added}`],
                     ["removed", `删除 ${comparison.summary.removed}`],
@@ -596,7 +657,7 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
                       type="button"
                       key={status}
                       className={filter === status ? "is-active" : ""}
-                      onClick={() => setFilter(status)}
+                      onClick={() => changeCandidateFilter(status)}
                     >
                       {label}
                     </button>
@@ -604,18 +665,117 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
                 </div>
                 <label className="search-field">
                   <span className="sr-only">搜索结果</span>
-                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索 ${keyField}、字段或内容`} />
+                  <input
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setCurrentPage(1);
+                      setSelectedEntry(null);
+                    }}
+                    placeholder={`搜索 ${keyField}、字段或内容`}
+                  />
                 </label>
               </div>
 
-              <p className="visible-count" aria-live="polite">当前显示 {visibleEntries.length} 条记录</p>
-              <div className="candidate-result-list" aria-live="polite">
-                {visibleEntries.length ? visibleEntries.map((entry) => (
-                  <CandidateResultItem entry={entry} key={`${entry.status}-${entry.key}`} keyField={keyField} />
-                )) : (
-                  <p className="empty-state">没有符合当前筛选条件的结果。</p>
-                )}
+              <div className="compact-table-controls">
+                <p aria-live="polite">
+                  {visibleEntries.length
+                    ? `显示第 ${pageStart + 1}–${Math.min(pageStart + pageSize, visibleEntries.length)} 条，共 ${visibleEntries.length} 条`
+                    : "当前没有记录"}
+                </p>
+                <div>
+                  <label>
+                    排序
+                    <select
+                      value={candidateSort}
+                      onChange={(event) => {
+                        setCandidateSort(event.target.value as CandidateSort);
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <option value="priority">按处理优先级</option>
+                      <option value="key">按 {keyField}</option>
+                      <option value="changes">按变化数量</option>
+                    </select>
+                  </label>
+                  <label>
+                    每页
+                    <select
+                      value={pageSize}
+                      onChange={(event) => {
+                        setPageSize(Number(event.target.value));
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <option value={25}>25 条</option>
+                      <option value={50}>50 条</option>
+                      <option value={100}>100 条</option>
+                    </select>
+                  </label>
+                </div>
               </div>
+
+              {paginatedEntries.length ? (
+                <>
+                  <p className="compact-scroll-hint">窄屏下可左右滑动表格查看全部列，右侧“查看”按钮会保持可见。</p>
+                  <div className="compact-table-shell" aria-live="polite">
+                  <div className="compact-table-scroll">
+                    <div className="compact-result-table" role="table" aria-label="表格差异结果">
+                      <div className="compact-table-header" role="row">
+                        <span role="columnheader">状态</span>
+                        <span role="columnheader">{keyField}</span>
+                        <span role="columnheader">名称</span>
+                        <span role="columnheader">变化字段</span>
+                        <span role="columnheader">首项变化</span>
+                        <span role="columnheader">数量</span>
+                        <span role="columnheader">详情</span>
+                      </div>
+                      {paginatedEntries.map((entry) => {
+                        const firstChange = entry.changes[0];
+                        const rowName = rowNameFor(entry);
+                        return (
+                          <div className={`compact-result-row status-${entry.status}`} role="row" key={`${entry.status}-${entry.key}`}>
+                            <span role="cell"><span className="status-pill">{CANDIDATE_STATUS_LABEL[entry.status]}</span></span>
+                            <code role="cell" title={entry.key}>{entry.key}</code>
+                            <span className="compact-name" role="cell" title={rowName}>{rowName || "—"}</span>
+                            <span className="compact-fields" role="cell" title={entry.changes.map((change) => change.field).join("、")}>
+                              {changedFieldSummary(entry)}
+                            </span>
+                            <span className="compact-first-change" role="cell">
+                              {entry.status === "changed" && firstChange ? (
+                                <>
+                                  <span className="compact-old" title={firstChange.before}>{shownValue(firstChange.before)}</span>
+                                  <span aria-hidden="true">→</span>
+                                  <span className="compact-new" title={firstChange.after}>{shownValue(firstChange.after)}</span>
+                                </>
+                              ) : (
+                                <span className="compact-description">{describeDifference(entry)}</span>
+                              )}
+                            </span>
+                            <strong role="cell">{entry.status === "changed" ? entry.changes.length : "—"}</strong>
+                            <span role="cell">
+                              <button type="button" className="view-detail-button" onClick={() => setSelectedEntry(entry)}>查看</button>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="pagination-bar">
+                    <span>第 {safeCurrentPage} / {totalPages} 页</span>
+                    <div>
+                      <button type="button" disabled={safeCurrentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>上一页</button>
+                      <button type="button" disabled={safeCurrentPage >= totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}>下一页</button>
+                    </div>
+                  </div>
+                </div>
+                </>
+              ) : (
+                <p className="empty-state compact-empty">没有符合当前筛选条件的结果。</p>
+              )}
+
+              <DifferenceDrawer entry={selectedEntry} keyField={keyField} onClose={() => setSelectedEntry(null)} />
             </>
           ) : (
             <>
