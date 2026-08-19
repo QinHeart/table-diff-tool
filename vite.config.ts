@@ -11,7 +11,7 @@ export default defineConfig({
   base: process.env.VITE_BASE_PATH || "/",
   plugins: [react()],
   build: {
-    outDir: resolve(projectRoot, "dist"),
+    outDir: resolve(projectRoot, process.env.VITE_OUT_DIR || "dist"),
     emptyOutDir: true,
     rollupOptions: {
       input: {

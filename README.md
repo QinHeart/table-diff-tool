@@ -42,6 +42,15 @@ npm run lint
 npm test
 ```
 
-推送到 `main` 后，GitHub Actions 会自动构建并更新 GitHub Pages。
+## 更新 GitHub Pages
+
+```bash
+npm run build:pages
+git add docs
+git commit -m "Update GitHub Pages"
+git push
+```
+
+GitHub Pages 直接发布 `main` 分支的 `docs` 目录，不依赖其他托管服务。
 
 表格读取和导出使用 [SheetJS Community Edition](https://docs.sheetjs.com/)；打包完成后，实际处理不依赖第三方上传服务。

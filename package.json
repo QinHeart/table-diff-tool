@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 3000",
     "build": "vite build",
+    "build:pages": "VITE_BASE_PATH=/table-diff-tool/ VITE_OUT_DIR=docs vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4174",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint ."

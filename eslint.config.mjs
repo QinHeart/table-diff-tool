@@ -8,10 +8,8 @@ import tseslint from "typescript-eslint";
 
 const eslintConfig = defineConfig([
   globalIgnores([
-    ".next/**",
     "dist/**",
-    "out/**",
-    "build/**",
+    "docs/**",
   ]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
