@@ -1,0 +1,544 @@
+"use client";
+
+import { DragEvent, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+import {
+  CellRow,
+  ComparisonResult,
+  DifferenceStatus,
+  buildExportRows,
+  compareSheets,
+  describeDifference,
+  getCommonHeaders,
+  getUnionHeaders,
+  suggestKeyField,
+} from "./diff-core";
+
+interface SheetData {
+  name: string;
+  headers: string[];
+  rows: CellRow[];
+}
+
+interface WorkbookData {
+  fileName: string;
+  sheets: SheetData[];
+}
+
+type Side = "before" | "after";
+type ResultFilter = "all" | DifferenceStatus;
+
+const STATUS_LABEL: Record<DifferenceStatus, string> = {
+  changed: "有变化",
+  added: "新增",
+  removed: "删除",
+  unchanged: "相同",
+  duplicate: "需处理",
+};
+
+const DEMO_BEFORE: CellRow[] = [
+  { SKU: "DEMO-0001", 商品名称: "便携标签打印机", 站点: "UK", 售价: "29.99", 库存: "86", 状态: "在售" },
+  { SKU: "DEMO-0002", 商品名称: "透明标签纸", 站点: "UK", 售价: "9.99", 库存: "240", 状态: "在售" },
+  { SKU: "DEMO-0003", 商品名称: "收纳标签套装", 站点: "DE", 售价: "12.90", 库存: "48", 状态: "在售" },
+  { SKU: "DEMO-0004", 商品名称: "迷你热敏纸", 站点: "FR", 售价: "8.50", 库存: "0", 状态: "待下架" },
+];
+
+const DEMO_AFTER: CellRow[] = [
+  { SKU: "DEMO-0001", 商品名称: "便携蓝牙标签打印机", 站点: "UK", 售价: "27.99", 库存: "112", 状态: "在售" },
+  { SKU: "DEMO-0002", 商品名称: "透明标签纸", 站点: "UK", 售价: "9.99", 库存: "240", 状态: "在售" },
+  { SKU: "DEMO-0003", 商品名称: "收纳标签套装", 站点: "DE", 售价: "12.90", 库存: "31", 状态: "在售" },
+  { SKU: "DEMO-0005", 商品名称: "彩色标签纸", 站点: "FR", 售价: "10.50", 库存: "75", 状态: "新品" },
+];
+
+function makeUniqueHeaders(values: unknown[], columnCount: number): string[] {
+  const seen = new Map<string, number>();
+  return Array.from({ length: columnCount }, (_, index) => {
+    const base = String(values[index] ?? "").trim() || `未命名列 ${index + 1}`;
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    return count === 1 ? base : `${base}（${count}）`;
+  });
+}
+
+function worksheetToData(name: string, worksheet: XLSX.WorkSheet): SheetData {
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+    header: 1,
+    raw: false,
+    defval: "",
+    blankrows: false,
+  });
+
+  if (!matrix.length) return { name, headers: [], rows: [] };
+
+  const columnCount = matrix.reduce((max, row) => Math.max(max, row.length), 0);
+  const headers = makeUniqueHeaders(matrix[0] ?? [], columnCount);
+  const rows = matrix.slice(1).flatMap<CellRow>((values) => {
+    const row = Object.fromEntries(headers.map((header, index) => [header, String(values[index] ?? "")])) as CellRow;
+    return Object.values(row).some((value) => value.trim() !== "") ? [row] : [];
+  });
+
+  return { name, headers, rows };
+}
+
+async function readWorkbook(file: File): Promise<WorkbookData> {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (!extension || !["xlsx", "xls", "csv", "tsv"].includes(extension)) {
+    throw new Error("请选择 Excel、CSV 或 TSV 文件");
+  }
+
+  const workbook = XLSX.read(await file.arrayBuffer(), {
+    type: "array",
+    raw: false,
+  });
+  const sheets = workbook.SheetNames.map((name) => worksheetToData(name, workbook.Sheets[name]));
+  if (!sheets.some((sheet) => sheet.headers.length)) throw new Error("文件中没有可读取的表格数据");
+  return { fileName: file.name, sheets };
+}
+
+function makeDemoWorkbook(fileName: string, rows: CellRow[]): WorkbookData {
+  return {
+    fileName,
+    sheets: [{ name: "商品资料", headers: Object.keys(rows[0]), rows }],
+  };
+}
+
+function FileCard({
+  side,
+  workbook,
+  sheetName,
+  onFile,
+  onSheet,
+}: {
+  side: Side;
+  workbook: WorkbookData | null;
+  sheetName: string;
+  onFile: (side: Side, file: File) => void;
+  onSheet: (name: string) => void;
+}) {
+  const sheet = workbook?.sheets.find((item) => item.name === sheetName) ?? null;
+  const [dragging, setDragging] = useState(false);
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files[0];
+    if (file) onFile(side, file);
+  }
+
+  return (
+    <section className={`file-card ${dragging ? "is-dragging" : ""}`}>
+      <div className="file-card-heading">
+        <span className="step-number">{side === "before" ? "A" : "B"}</span>
+        <div>
+          <h2>{side === "before" ? "旧文件" : "新文件"}</h2>
+          <p>{side === "before" ? "作为比较基准" : "查看相对变化"}</p>
+        </div>
+      </div>
+
+      <label
+        className="drop-zone"
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+      >
+        <input
+          type="file"
+          accept=".xlsx,.xls,.csv,.tsv"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onFile(side, file);
+            event.target.value = "";
+          }}
+        />
+        <strong>{workbook ? "更换文件" : "选择或拖入文件"}</strong>
+        <span>支持 XLSX、XLS、CSV、TSV</span>
+      </label>
+
+      {workbook && sheet ? (
+        <div className="file-meta" aria-live="polite">
+          <div className="file-name" title={workbook.fileName}>{workbook.fileName}</div>
+          <div className="file-stats">
+            <span>{sheet.rows.length.toLocaleString("zh-CN")} 行</span>
+            <span>{sheet.headers.length} 列</span>
+          </div>
+          {workbook.sheets.length > 1 ? (
+            <label className="sheet-picker">
+              工作表
+              <select value={sheetName} onChange={(event) => onSheet(event.target.value)}>
+                {workbook.sheets.map((item) => <option key={item.name}>{item.name}</option>)}
+              </select>
+            </label>
+          ) : (
+            <span className="single-sheet">工作表：{sheet.name}</span>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+export function TableDiffTool() {
+  const [beforeBook, setBeforeBook] = useState<WorkbookData | null>(null);
+  const [afterBook, setAfterBook] = useState<WorkbookData | null>(null);
+  const [beforeSheetName, setBeforeSheetName] = useState("");
+  const [afterSheetName, setAfterSheetName] = useState("");
+  const [keyField, setKeyField] = useState("");
+  const [selectedFields, setSelectedFields] = useState<string[]>([]);
+  const [ignoreOuterWhitespace, setIgnoreOuterWhitespace] = useState(true);
+  const [comparison, setComparison] = useState<ComparisonResult | null>(null);
+  const [filter, setFilter] = useState<ResultFilter>("all");
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const [loadingSide, setLoadingSide] = useState<Side | null>(null);
+  const [exportMessage, setExportMessage] = useState("");
+
+  const beforeSheet = beforeBook?.sheets.find((sheet) => sheet.name === beforeSheetName) ?? null;
+  const afterSheet = afterBook?.sheets.find((sheet) => sheet.name === afterSheetName) ?? null;
+  const commonHeaders = useMemo(
+    () => getCommonHeaders(beforeSheet?.headers ?? [], afterSheet?.headers ?? []),
+    [beforeSheet, afterSheet],
+  );
+  const unionHeaders = useMemo(
+    () => getUnionHeaders(beforeSheet?.headers ?? [], afterSheet?.headers ?? []),
+    [beforeSheet, afterSheet],
+  );
+
+  function configureForSheets(nextBefore: SheetData | null, nextAfter: SheetData | null) {
+    if (!nextBefore || !nextAfter) {
+      setKeyField("");
+      setSelectedFields([]);
+    } else {
+      const common = getCommonHeaders(nextBefore.headers, nextAfter.headers);
+      const union = getUnionHeaders(nextBefore.headers, nextAfter.headers);
+      const suggested = suggestKeyField(common);
+      setKeyField(suggested);
+      setSelectedFields(union.filter((header) => header !== suggested));
+    }
+    setComparison(null);
+    setFilter("all");
+  }
+
+  async function handleFile(side: Side, file: File) {
+    setError("");
+    setLoadingSide(side);
+    try {
+      const workbook = await readWorkbook(file);
+      const firstSheet = workbook.sheets.find((sheet) => sheet.headers.length) ?? workbook.sheets[0];
+      if (side === "before") {
+        setBeforeBook(workbook);
+        setBeforeSheetName(firstSheet.name);
+        configureForSheets(firstSheet, afterSheet);
+      } else {
+        setAfterBook(workbook);
+        setAfterSheetName(firstSheet.name);
+        configureForSheets(beforeSheet, firstSheet);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "文件读取失败");
+    } finally {
+      setLoadingSide(null);
+    }
+  }
+
+  function loadDemo() {
+    const before = makeDemoWorkbook("旧版商品资料（虚构示例）.xlsx", DEMO_BEFORE);
+    const after = makeDemoWorkbook("新版商品资料（虚构示例）.xlsx", DEMO_AFTER);
+    const fields = before.sheets[0].headers.filter((header) => header !== "SKU");
+    setBeforeBook(before);
+    setAfterBook(after);
+    setBeforeSheetName("商品资料");
+    setAfterSheetName("商品资料");
+    setKeyField("SKU");
+    setSelectedFields(fields);
+    setComparison(compareSheets({
+      beforeRows: DEMO_BEFORE,
+      afterRows: DEMO_AFTER,
+      keyField: "SKU",
+      compareFields: fields,
+    }));
+    setFilter("all");
+    setQuery("");
+    setError("");
+    setExportMessage("");
+  }
+
+  function runComparison() {
+    if (!beforeSheet || !afterSheet || !keyField) {
+      setError("请先选择两份文件和匹配列");
+      return;
+    }
+    if (!selectedFields.length) {
+      setError("请至少选择一个需要比较的字段");
+      return;
+    }
+    setComparison(compareSheets({
+      beforeRows: beforeSheet.rows,
+      afterRows: afterSheet.rows,
+      keyField,
+      compareFields: selectedFields,
+      ignoreOuterWhitespace,
+    }));
+    setFilter("all");
+    setQuery("");
+    setError("");
+    setExportMessage("");
+    window.setTimeout(() => document.getElementById("comparison-results")?.scrollIntoView({ behavior: "smooth" }), 50);
+  }
+
+  function exportDifferences() {
+    if (!comparison) return;
+    const { summaryRows, detailRows } = buildExportRows(comparison, keyField);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryRows), "差异摘要");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailRows), "字段变化");
+    const content = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+    const url = URL.createObjectURL(new Blob([content], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `表格差异_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setExportMessage(`已生成 ${summaryRows.length} 条差异记录`);
+  }
+
+  const visibleEntries = useMemo(() => {
+    if (!comparison) return [];
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    return comparison.entries.filter((entry) => {
+      if (filter !== "all" && entry.status !== filter) return false;
+      if (!normalizedQuery) return true;
+      const haystack = [
+        entry.key,
+        ...entry.changes.flatMap((change) => [change.field, change.before, change.after]),
+      ].join(" ").toLocaleLowerCase("zh-CN");
+      return haystack.includes(normalizedQuery);
+    });
+  }, [comparison, filter, query]);
+
+  const ready = Boolean(beforeSheet && afterSheet && keyField && selectedFields.length);
+  const currentStep = comparison ? 3 : beforeSheet && afterSheet ? 2 : 1;
+
+  return (
+    <main className="app-shell">
+      <header className="hero">
+        <div>
+          <p className="eyebrow">本地表格工具</p>
+          <h1>两份文件，快速看清差异</h1>
+          <p className="hero-copy">对比 Excel 或 CSV，准确找出新增、删除和字段变化。文件只在当前浏览器中处理。</p>
+        </div>
+        <button className="demo-button" type="button" onClick={loadDemo}>载入虚构示例</button>
+      </header>
+
+      <nav className="progress" aria-label="操作进度">
+        {["上传文件", "设置比较", "查看结果"].map((label, index) => (
+          <div className={currentStep >= index + 1 ? "is-active" : ""} key={label}>
+            <span>{index + 1}</span>{label}
+          </div>
+        ))}
+      </nav>
+
+      <div className="upload-grid">
+        <FileCard
+          side="before"
+          workbook={beforeBook}
+          sheetName={beforeSheetName}
+          onFile={handleFile}
+          onSheet={(name) => {
+            const nextSheet = beforeBook?.sheets.find((sheet) => sheet.name === name) ?? null;
+            setBeforeSheetName(name);
+            configureForSheets(nextSheet, afterSheet);
+          }}
+        />
+        <FileCard
+          side="after"
+          workbook={afterBook}
+          sheetName={afterSheetName}
+          onFile={handleFile}
+          onSheet={(name) => {
+            const nextSheet = afterBook?.sheets.find((sheet) => sheet.name === name) ?? null;
+            setAfterSheetName(name);
+            configureForSheets(beforeSheet, nextSheet);
+          }}
+        />
+      </div>
+
+      {loadingSide ? <p className="notice" role="status">正在读取{loadingSide === "before" ? "旧" : "新"}文件…</p> : null}
+      {error ? <p className="error-notice" role="alert">{error}</p> : null}
+
+      {beforeSheet && afterSheet ? (
+        <section className="settings-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">第 2 步</p>
+              <h2>设置比较方式</h2>
+            </div>
+            <p>{commonHeaders.length} 个同名字段可用</p>
+          </div>
+
+          {commonHeaders.length ? (
+            <>
+              <div className="settings-row">
+                <label className="select-field">
+                  <span>用哪一列匹配每一行</span>
+                  <select
+                    value={keyField}
+                    onChange={(event) => {
+                      const nextKey = event.target.value;
+                      setKeyField(nextKey);
+                      setSelectedFields(unionHeaders.filter((header) => header !== nextKey));
+                      setComparison(null);
+                    }}
+                  >
+                    {commonHeaders.map((header) => <option key={header}>{header}</option>)}
+                  </select>
+                  <small>这一列应当是唯一的，例如 SKU、ASIN 或订单号</small>
+                </label>
+                <label className="toggle-field">
+                  <input
+                    type="checkbox"
+                    checked={ignoreOuterWhitespace}
+                    onChange={(event) => { setIgnoreOuterWhitespace(event.target.checked); setComparison(null); }}
+                  />
+                  <span>忽略单元格首尾空格</span>
+                </label>
+              </div>
+
+              <fieldset className="field-selector">
+                <legend>需要比较的字段</legend>
+                <div className="field-actions">
+                  <button type="button" onClick={() => { setSelectedFields(unionHeaders.filter((header) => header !== keyField)); setComparison(null); }}>全选</button>
+                  <button type="button" onClick={() => { setSelectedFields([]); setComparison(null); }}>清空</button>
+                  <span>已选 {selectedFields.length} 项</span>
+                </div>
+                <div className="field-chips">
+                  {unionHeaders.filter((header) => header !== keyField).map((header) => (
+                    <label key={header}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFields.includes(header)}
+                        onChange={(event) => {
+                          setSelectedFields((current) => event.target.checked
+                            ? [...current, header]
+                            : current.filter((field) => field !== header));
+                          setComparison(null);
+                        }}
+                      />
+                      <span>{header}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <button className="compare-button" type="button" disabled={!ready} onClick={runComparison}>
+                开始对比
+              </button>
+            </>
+          ) : (
+            <p className="empty-state">两份文件没有同名字段，暂时无法选择匹配列。请检查表头。</p>
+          )}
+        </section>
+      ) : null}
+
+      {comparison ? (
+        <section className="results" id="comparison-results">
+          <div className="section-heading results-heading">
+            <div>
+              <p className="section-kicker">第 3 步</p>
+              <h2>比较结果</h2>
+            </div>
+            <button type="button" className="export-button" onClick={exportDifferences}>导出差异 Excel</button>
+          </div>
+
+          {exportMessage ? <p className="success-notice" role="status">{exportMessage}</p> : null}
+
+          <div className="summary-grid">
+            {([
+              ["changed", "有变化", comparison.summary.changed],
+              ["added", "新增", comparison.summary.added],
+              ["removed", "删除", comparison.summary.removed],
+              ["unchanged", "相同", comparison.summary.unchanged],
+              ["duplicate", "需处理", comparison.summary.issues],
+            ] as const).map(([status, label, count]) => (
+              <button
+                type="button"
+                key={status}
+                className={`summary-card status-${status} ${filter === status ? "is-selected" : ""}`}
+                onClick={() => setFilter(filter === status ? "all" : status)}
+              >
+                <span>{label}</span>
+                <strong>{count}</strong>
+              </button>
+            ))}
+          </div>
+
+          {comparison.summary.issues ? (
+            <p className="issue-note">
+              有 {comparison.summary.duplicate} 个重复标识；旧文件 {comparison.emptyKeyRows.before} 行、新文件 {comparison.emptyKeyRows.after} 行缺少匹配值。重复或空标识不会被当作正常变化。
+            </p>
+          ) : null}
+
+          <div className="result-toolbar">
+            <div className="filter-tabs" role="group" aria-label="结果筛选">
+              {(["all", "changed", "added", "removed", "unchanged", "duplicate"] as ResultFilter[]).map((status) => (
+                <button
+                  type="button"
+                  key={status}
+                  className={filter === status ? "is-active" : ""}
+                  onClick={() => setFilter(status)}
+                >
+                  {status === "all" ? `全部 ${comparison.summary.total}` : STATUS_LABEL[status]}
+                </button>
+              ))}
+            </div>
+            <label className="search-field">
+              <span className="sr-only">搜索结果</span>
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索 ${keyField}、字段或内容`} />
+            </label>
+          </div>
+
+          <div className="result-list" aria-live="polite">
+            {visibleEntries.length ? visibleEntries.map((entry) => (
+              <details className={`result-item status-${entry.status}`} key={`${entry.status}-${entry.key}`}>
+                <summary>
+                  <span className="status-pill">{STATUS_LABEL[entry.status]}</span>
+                  <code>{entry.key}</code>
+                  <span className="change-labels">
+                    {entry.changes.slice(0, 3).map((change) => <span key={change.field}>{change.field}</span>)}
+                    {entry.changes.length > 3 ? <span>+{entry.changes.length - 3}</span> : null}
+                  </span>
+                  <span className="result-description">{describeDifference(entry)}</span>
+                  <span className="disclosure">展开</span>
+                </summary>
+                <div className="change-table">
+                  {entry.status === "duplicate" ? (
+                    <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
+                  ) : entry.changes.length ? entry.changes.map((change) => (
+                    <div className="change-row" key={change.field}>
+                      <strong>{change.field}</strong>
+                      <div><span>旧值</span><p>{change.before || "（空）"}</p></div>
+                      <div><span>新值</span><p>{change.after || "（空）"}</p></div>
+                    </div>
+                  )) : (
+                    <div className="duplicate-message">所选字段没有差异。</div>
+                  )}
+                </div>
+              </details>
+            )) : (
+              <p className="empty-state">没有符合当前筛选条件的结果。</p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <footer>本地处理 · 不上传文件 · 关闭页面后不保留表格内容</footer>
+    </main>
+  );
+}
