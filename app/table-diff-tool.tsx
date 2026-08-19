@@ -26,7 +26,8 @@ interface WorkbookData {
 }
 
 type Side = "before" | "after";
-type ResultFilter = "all" | DifferenceStatus;
+type ResultLayout = "classic" | "candidate";
+type ResultFilter = "all" | "attention" | DifferenceStatus;
 
 const STATUS_LABEL: Record<DifferenceStatus, string> = {
   changed: "有变化",
@@ -180,7 +181,72 @@ function FileCard({
   );
 }
 
-export function TableDiffTool() {
+const CANDIDATE_STATUS_LABEL: Record<DifferenceStatus, string> = {
+  changed: "修改",
+  added: "新增",
+  removed: "删除",
+  unchanged: "相同",
+  duplicate: "数据问题",
+};
+
+function shownValue(value: string) {
+  return value || "（空）";
+}
+
+function CandidateResultItem({ entry, keyField }: { entry: ComparisonResult["entries"][number]; keyField: string }) {
+  const row = entry.after ?? entry.before;
+  const rowName = row?.["商品名称"] || row?.["名称"] || "";
+  const previewChanges = entry.status === "changed" ? entry.changes.slice(0, 2) : [];
+
+  return (
+    <details className={`candidate-result-item status-${entry.status}`}>
+      <summary>
+        <span className="candidate-item-main">
+          <span className="status-pill">{CANDIDATE_STATUS_LABEL[entry.status]}</span>
+          <code>{entry.key}</code>
+          <span className="candidate-description">
+            {rowName ? <strong>{rowName}</strong> : null}
+            <span>{describeDifference(entry)}</span>
+          </span>
+          <span className="candidate-disclosure">展开详情</span>
+        </span>
+
+        {previewChanges.length ? (
+          <span className="change-preview-list">
+            {previewChanges.map((change) => (
+              <span className="change-preview" key={change.field}>
+                <strong>{change.field}</strong>
+                <span className="preview-old">{shownValue(change.before)}</span>
+                <span className="preview-arrow" aria-hidden="true">→</span>
+                <span className="preview-new">{shownValue(change.after)}</span>
+              </span>
+            ))}
+            {entry.changes.length > previewChanges.length ? (
+              <span className="more-change-count">另有 {entry.changes.length - previewChanges.length} 项变化</span>
+            ) : null}
+          </span>
+        ) : null}
+      </summary>
+
+      <div className="change-table candidate-change-table">
+        {entry.status === "duplicate" ? (
+          <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
+        ) : entry.changes.length ? entry.changes.map((change) => (
+          <div className="change-row" key={change.field}>
+            <strong>{change.field}</strong>
+            <div><span>旧值</span><p className="detail-old">{shownValue(change.before)}</p></div>
+            <div><span>新值</span><p className="detail-new">{shownValue(change.after)}</p></div>
+          </div>
+        )) : (
+          <div className="duplicate-message">所选字段没有差异。</div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: ResultLayout }) {
+  const defaultResultFilter: ResultFilter = resultLayout === "candidate" ? "attention" : "all";
   const [beforeBook, setBeforeBook] = useState<WorkbookData | null>(null);
   const [afterBook, setAfterBook] = useState<WorkbookData | null>(null);
   const [beforeSheetName, setBeforeSheetName] = useState("");
@@ -189,7 +255,7 @@ export function TableDiffTool() {
   const [selectedFields, setSelectedFields] = useState<string[]>([]);
   const [ignoreOuterWhitespace, setIgnoreOuterWhitespace] = useState(true);
   const [comparison, setComparison] = useState<ComparisonResult | null>(null);
-  const [filter, setFilter] = useState<ResultFilter>("all");
+  const [filter, setFilter] = useState<ResultFilter>(defaultResultFilter);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [loadingSide, setLoadingSide] = useState<Side | null>(null);
@@ -218,7 +284,7 @@ export function TableDiffTool() {
       setSelectedFields(union.filter((header) => header !== suggested));
     }
     setComparison(null);
-    setFilter("all");
+    setFilter(defaultResultFilter);
   }
 
   async function handleFile(side: Side, file: File) {
@@ -259,7 +325,7 @@ export function TableDiffTool() {
       keyField: "SKU",
       compareFields: fields,
     }));
-    setFilter("all");
+    setFilter(defaultResultFilter);
     setQuery("");
     setError("");
     setExportMessage("");
@@ -281,7 +347,7 @@ export function TableDiffTool() {
       compareFields: selectedFields,
       ignoreOuterWhitespace,
     }));
-    setFilter("all");
+    setFilter(defaultResultFilter);
     setQuery("");
     setError("");
     setExportMessage("");
@@ -312,8 +378,11 @@ export function TableDiffTool() {
   const visibleEntries = useMemo(() => {
     if (!comparison) return [];
     const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
-    return comparison.entries.filter((entry) => {
-      if (filter !== "all" && entry.status !== filter) return false;
+    const entries = comparison.entries.filter((entry) => {
+      const statusMatches = filter === "all"
+        || (filter === "attention" && entry.status !== "unchanged")
+        || entry.status === filter;
+      if (!statusMatches) return false;
       if (!normalizedQuery) return true;
       const haystack = [
         entry.key,
@@ -321,10 +390,24 @@ export function TableDiffTool() {
       ].join(" ").toLocaleLowerCase("zh-CN");
       return haystack.includes(normalizedQuery);
     });
-  }, [comparison, filter, query]);
+    if (resultLayout === "candidate") {
+      const priority: Record<DifferenceStatus, number> = {
+        duplicate: 0,
+        changed: 1,
+        added: 2,
+        removed: 3,
+        unchanged: 4,
+      };
+      entries.sort((a, b) => priority[a.status] - priority[b.status]);
+    }
+    return entries;
+  }, [comparison, filter, query, resultLayout]);
 
   const ready = Boolean(beforeSheet && afterSheet && keyField && selectedFields.length);
   const currentStep = comparison ? 3 : beforeSheet && afterSheet ? 2 : 1;
+  const attentionCount = comparison
+    ? comparison.summary.changed + comparison.summary.added + comparison.summary.removed + comparison.summary.issues
+    : 0;
 
   return (
     <main className="app-shell">
@@ -459,82 +542,161 @@ export function TableDiffTool() {
 
           {exportMessage ? <p className="success-notice" role="status">{exportMessage}</p> : null}
 
-          <div className="summary-grid">
-            {([
-              ["changed", "有变化", comparison.summary.changed],
-              ["added", "新增", comparison.summary.added],
-              ["removed", "删除", comparison.summary.removed],
-              ["unchanged", "相同", comparison.summary.unchanged],
-              ["duplicate", "需处理", comparison.summary.issues],
-            ] as const).map(([status, label, count]) => (
-              <button
-                type="button"
-                key={status}
-                className={`summary-card status-${status} ${filter === status ? "is-selected" : ""}`}
-                onClick={() => setFilter(filter === status ? "all" : status)}
-              >
-                <span>{label}</span>
-                <strong>{count}</strong>
-              </button>
-            ))}
-          </div>
-
-          {comparison.summary.issues ? (
-            <p className="issue-note">
-              有 {comparison.summary.duplicate} 个重复标识；旧文件 {comparison.emptyKeyRows.before} 行、新文件 {comparison.emptyKeyRows.after} 行缺少匹配值。重复或空标识不会被当作正常变化。
-            </p>
-          ) : null}
-
-          <div className="result-toolbar">
-            <div className="filter-tabs" role="group" aria-label="结果筛选">
-              {(["all", "changed", "added", "removed", "unchanged", "duplicate"] as ResultFilter[]).map((status) => (
-                <button
-                  type="button"
-                  key={status}
-                  className={filter === status ? "is-active" : ""}
-                  onClick={() => setFilter(status)}
-                >
-                  {status === "all" ? `全部 ${comparison.summary.total}` : STATUS_LABEL[status]}
-                </button>
-              ))}
-            </div>
-            <label className="search-field">
-              <span className="sr-only">搜索结果</span>
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索 ${keyField}、字段或内容`} />
-            </label>
-          </div>
-
-          <div className="result-list" aria-live="polite">
-            {visibleEntries.length ? visibleEntries.map((entry) => (
-              <details className={`result-item status-${entry.status}`} key={`${entry.status}-${entry.key}`}>
-                <summary>
-                  <span className="status-pill">{STATUS_LABEL[entry.status]}</span>
-                  <code>{entry.key}</code>
-                  <span className="change-labels">
-                    {entry.changes.slice(0, 3).map((change) => <span key={change.field}>{change.field}</span>)}
-                    {entry.changes.length > 3 ? <span>+{entry.changes.length - 3}</span> : null}
-                  </span>
-                  <span className="result-description">{describeDifference(entry)}</span>
-                  <span className="disclosure">展开</span>
-                </summary>
-                <div className="change-table">
-                  {entry.status === "duplicate" ? (
-                    <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
-                  ) : entry.changes.length ? entry.changes.map((change) => (
-                    <div className="change-row" key={change.field}>
-                      <strong>{change.field}</strong>
-                      <div><span>旧值</span><p>{change.before || "（空）"}</p></div>
-                      <div><span>新值</span><p>{change.after || "（空）"}</p></div>
-                    </div>
-                  )) : (
-                    <div className="duplicate-message">所选字段没有差异。</div>
-                  )}
+          {resultLayout === "candidate" ? (
+            <>
+              <div className="candidate-overview">
+                <div className="candidate-verdict">
+                  <span>比较完成</span>
+                  <strong>{attentionCount} 项需要关注</strong>
+                  <p>共比较 {comparison.summary.total} 个 {keyField}，其中 {comparison.summary.unchanged} 个完全相同。</p>
                 </div>
-              </details>
-            )) : (
-              <p className="empty-state">没有符合当前筛选条件的结果。</p>
-            )}
-          </div>
+                <div className="candidate-metrics">
+                  {([
+                    ["changed", "修改", comparison.summary.changed],
+                    ["added", "新增", comparison.summary.added],
+                    ["removed", "删除", comparison.summary.removed],
+                    ["duplicate", "数据问题", comparison.summary.issues],
+                  ] as const).map(([status, label, count]) => (
+                    <button
+                      type="button"
+                      key={status}
+                      className={`candidate-metric status-${status} ${filter === status ? "is-selected" : ""}`}
+                      onClick={() => setFilter(status)}
+                    >
+                      <span>{label}</span>
+                      <strong>{count}</strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {comparison.summary.issues ? (
+                <p className="issue-note">
+                  有 {comparison.summary.duplicate} 个重复标识；旧文件 {comparison.emptyKeyRows.before} 行、新文件 {comparison.emptyKeyRows.after} 行缺少匹配值。请先修正这些数据再重新比较。
+                </p>
+              ) : null}
+
+              <div className="candidate-guidance">
+                <strong>先看需要关注的内容</strong>
+                <span>修改项直接显示前两处“旧值 → 新值”，点击任意记录可查看完整详情。</span>
+              </div>
+
+              <div className="result-toolbar candidate-toolbar">
+                <div className="filter-tabs candidate-filter-tabs" role="group" aria-label="结果筛选">
+                  {([
+                    ["attention", `需要关注 ${attentionCount}`],
+                    ["changed", `修改 ${comparison.summary.changed}`],
+                    ["added", `新增 ${comparison.summary.added}`],
+                    ["removed", `删除 ${comparison.summary.removed}`],
+                    ["duplicate", `数据问题 ${comparison.summary.duplicate}`],
+                    ["unchanged", `相同 ${comparison.summary.unchanged}`],
+                    ["all", `全部 ${comparison.summary.total}`],
+                  ] as const).map(([status, label]) => (
+                    <button
+                      type="button"
+                      key={status}
+                      className={filter === status ? "is-active" : ""}
+                      onClick={() => setFilter(status)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="search-field">
+                  <span className="sr-only">搜索结果</span>
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索 ${keyField}、字段或内容`} />
+                </label>
+              </div>
+
+              <p className="visible-count" aria-live="polite">当前显示 {visibleEntries.length} 条记录</p>
+              <div className="candidate-result-list" aria-live="polite">
+                {visibleEntries.length ? visibleEntries.map((entry) => (
+                  <CandidateResultItem entry={entry} key={`${entry.status}-${entry.key}`} keyField={keyField} />
+                )) : (
+                  <p className="empty-state">没有符合当前筛选条件的结果。</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="summary-grid">
+                {([
+                  ["changed", "有变化", comparison.summary.changed],
+                  ["added", "新增", comparison.summary.added],
+                  ["removed", "删除", comparison.summary.removed],
+                  ["unchanged", "相同", comparison.summary.unchanged],
+                  ["duplicate", "需处理", comparison.summary.issues],
+                ] as const).map(([status, label, count]) => (
+                  <button
+                    type="button"
+                    key={status}
+                    className={`summary-card status-${status} ${filter === status ? "is-selected" : ""}`}
+                    onClick={() => setFilter(filter === status ? "all" : status)}
+                  >
+                    <span>{label}</span>
+                    <strong>{count}</strong>
+                  </button>
+                ))}
+              </div>
+
+              {comparison.summary.issues ? (
+                <p className="issue-note">
+                  有 {comparison.summary.duplicate} 个重复标识；旧文件 {comparison.emptyKeyRows.before} 行、新文件 {comparison.emptyKeyRows.after} 行缺少匹配值。重复或空标识不会被当作正常变化。
+                </p>
+              ) : null}
+
+              <div className="result-toolbar">
+                <div className="filter-tabs" role="group" aria-label="结果筛选">
+                  {(["all", "changed", "added", "removed", "unchanged", "duplicate"] as const).map((status) => (
+                    <button
+                      type="button"
+                      key={status}
+                      className={filter === status ? "is-active" : ""}
+                      onClick={() => setFilter(status)}
+                    >
+                      {status === "all" ? `全部 ${comparison.summary.total}` : STATUS_LABEL[status]}
+                    </button>
+                  ))}
+                </div>
+                <label className="search-field">
+                  <span className="sr-only">搜索结果</span>
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索 ${keyField}、字段或内容`} />
+                </label>
+              </div>
+
+              <div className="result-list" aria-live="polite">
+                {visibleEntries.length ? visibleEntries.map((entry) => (
+                  <details className={`result-item status-${entry.status}`} key={`${entry.status}-${entry.key}`}>
+                    <summary>
+                      <span className="status-pill">{STATUS_LABEL[entry.status]}</span>
+                      <code>{entry.key}</code>
+                      <span className="change-labels">
+                        {entry.changes.slice(0, 3).map((change) => <span key={change.field}>{change.field}</span>)}
+                        {entry.changes.length > 3 ? <span>+{entry.changes.length - 3}</span> : null}
+                      </span>
+                      <span className="result-description">{describeDifference(entry)}</span>
+                      <span className="disclosure">展开</span>
+                    </summary>
+                    <div className="change-table">
+                      {entry.status === "duplicate" ? (
+                        <div className="duplicate-message">请先在源文件中处理重复的 {keyField}，再重新比较。</div>
+                      ) : entry.changes.length ? entry.changes.map((change) => (
+                        <div className="change-row" key={change.field}>
+                          <strong>{change.field}</strong>
+                          <div><span>旧值</span><p>{shownValue(change.before)}</p></div>
+                          <div><span>新值</span><p>{shownValue(change.after)}</p></div>
+                        </div>
+                      )) : (
+                        <div className="duplicate-message">所选字段没有差异。</div>
+                      )}
+                    </div>
+                  </details>
+                )) : (
+                  <p className="empty-state">没有符合当前筛选条件的结果。</p>
+                )}
+              </div>
+            </>
+          )}
         </section>
       ) : null}
 

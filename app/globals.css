@@ -278,6 +278,105 @@ h1 {
 .duplicate-message { padding: 16px 0 4px; color: var(--muted); font-size: 12px; }
 .empty-state { margin: 0; padding: 28px; color: var(--muted); text-align: center; font-size: 13px; }
 
+.candidate-overview {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) minmax(420px, 1.6fr);
+  gap: 12px;
+}
+
+.candidate-verdict {
+  min-height: 132px;
+  padding: 20px;
+  border-radius: 13px;
+  color: #fff;
+  background: var(--ink);
+}
+
+.candidate-verdict > span { display: block; margin-bottom: 10px; color: #b8c6c0; font-size: 11px; font-weight: 700; }
+.candidate-verdict > strong { display: block; font-size: clamp(25px, 3vw, 34px); line-height: 1.15; }
+.candidate-verdict p { margin: 12px 0 0; color: #dce5e1; font-size: 12px; line-height: 1.6; }
+
+.candidate-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.candidate-metric {
+  display: flex;
+  min-width: 0;
+  cursor: pointer;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  background: #fff;
+  text-align: left;
+}
+.candidate-metric:hover { border-color: #bcc7c1; }
+.candidate-metric.is-selected { box-shadow: inset 0 0 0 2px currentColor; }
+.candidate-metric span { font-size: 11px; font-weight: 750; }
+.candidate-metric strong { color: var(--ink); font-size: 28px; }
+.candidate-metric.status-changed { color: var(--amber); background: var(--amber-soft); }
+.candidate-metric.status-added { color: var(--green); background: var(--green-soft); }
+.candidate-metric.status-removed { color: var(--red); background: var(--red-soft); }
+.candidate-metric.status-duplicate { color: #7357a6; background: #f2eef8; }
+
+.candidate-guidance {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 11px 13px;
+  border-left: 3px solid var(--green);
+  color: var(--muted);
+  background: #f7faf8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.candidate-guidance strong { flex: 0 0 auto; color: var(--ink); }
+.candidate-toolbar { margin-top: 14px; }
+.candidate-filter-tabs button:first-child { color: var(--green); font-weight: 750; }
+.candidate-filter-tabs button:first-child.is-active { color: #fff; background: var(--green); }
+.visible-count { margin: -2px 0 8px; color: var(--muted); font-size: 11px; }
+
+.candidate-result-list { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.candidate-result-item { border-bottom: 1px solid var(--line); }
+.candidate-result-item:last-child { border-bottom: 0; }
+.candidate-result-item > summary { display: block; padding: 15px 16px; cursor: pointer; list-style: none; }
+.candidate-result-item > summary::-webkit-details-marker { display: none; }
+.candidate-result-item[open] > summary { background: #fafbfa; }
+.candidate-item-main {
+  display: grid;
+  grid-template-columns: 72px minmax(130px, 0.8fr) minmax(180px, 1.5fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.candidate-item-main code { overflow: hidden; color: var(--ink); font-family: var(--font-geist-mono), monospace; font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-description { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.candidate-description strong { overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-description span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.candidate-disclosure { color: var(--blue); font-size: 10px; }
+.candidate-result-item[open] .candidate-disclosure { font-size: 0; }
+.candidate-result-item[open] .candidate-disclosure::after { content: "收起详情"; font-size: 10px; }
+
+.change-preview-list { display: grid; gap: 7px; margin: 13px 0 0 84px; }
+.change-preview {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.55fr) minmax(120px, 1fr) 20px minmax(120px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.change-preview > strong { color: var(--ink); font-size: 11px; }
+.preview-old, .preview-new { overflow: hidden; padding: 7px 9px; border-radius: 6px; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.preview-old { color: #8d4141; background: var(--red-soft); text-decoration: line-through; text-decoration-color: rgba(180, 71, 71, 0.45); }
+.preview-new { color: #126542; background: var(--green-soft); font-weight: 700; }
+.preview-arrow { color: #8b9591; text-align: center; }
+.more-change-count { margin-left: 100px; color: var(--muted); font-size: 10px; }
+.candidate-change-table { padding: 0 16px 16px; border-top: 1px solid var(--line); }
+.candidate-change-table .change-row:first-child { border-top: 0; }
+.candidate-change-table .detail-old { background: var(--red-soft); }
+.candidate-change-table .detail-new { background: var(--green-soft); }
+
 footer { padding-top: 24px; color: #929b97; font-size: 11px; text-align: center; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -309,6 +408,18 @@ footer { padding-top: 24px; color: #929b97; font-size: 11px; text-align: center;
   .change-row { grid-template-columns: 1fr; gap: 5px; }
   .change-row > strong { padding-top: 3px; }
   .compare-button { width: 100%; }
+  .candidate-overview { grid-template-columns: 1fr; }
+  .candidate-verdict { min-height: 0; }
+  .candidate-metrics { grid-template-columns: repeat(2, 1fr); }
+  .candidate-metric { min-height: 86px; }
+  .candidate-guidance { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .candidate-filter-tabs { flex-wrap: wrap; overflow-x: visible; }
+  .candidate-item-main { grid-template-columns: 68px minmax(100px, 1fr) auto; gap: 8px; }
+  .candidate-description { grid-column: 1 / -1; grid-row: 2; align-items: flex-start; flex-direction: column; gap: 2px; }
+  .change-preview-list { margin-left: 0; }
+  .change-preview { grid-template-columns: 1fr 20px 1fr; }
+  .change-preview > strong { grid-column: 1 / -1; }
+  .more-change-count { margin-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
