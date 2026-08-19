@@ -472,13 +472,9 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
 
   return (
     <main className="app-shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">本地表格工具</p>
-          <h1>两份文件，快速看清差异</h1>
-          <p className="hero-copy">对比 Excel 或 CSV，准确找出新增、删除和字段变化。文件只在当前浏览器中处理。</p>
-        </div>
-        <button className="demo-button" type="button" onClick={loadDemo}>载入虚构示例</button>
+      <header className="tool-header">
+        <h1>表格差异对比</h1>
+        <button className="demo-button" type="button" onClick={loadDemo}>载入示例</button>
       </header>
 
       <nav className="progress" aria-label="操作进度">
@@ -605,42 +601,16 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
 
           {resultLayout === "candidate" ? (
             <>
-              <div className="candidate-overview">
-                <div className="candidate-verdict">
-                  <span>比较完成</span>
-                  <strong>{attentionCount} 项需要关注</strong>
-                  <p>共比较 {comparison.summary.total} 个 {keyField}，其中 {comparison.summary.unchanged} 个完全相同。</p>
-                </div>
-                <div className="candidate-metrics">
-                  {([
-                    ["changed", "修改", comparison.summary.changed],
-                    ["added", "新增", comparison.summary.added],
-                    ["removed", "删除", comparison.summary.removed],
-                    ["duplicate", "数据问题", comparison.summary.issues],
-                  ] as const).map(([status, label, count]) => (
-                    <button
-                      type="button"
-                      key={status}
-                      className={`candidate-metric status-${status} ${filter === status ? "is-selected" : ""}`}
-                      onClick={() => changeCandidateFilter(status)}
-                    >
-                      <span>{label}</span>
-                      <strong>{count}</strong>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="compact-result-summary">
+                <strong>{attentionCount} 项需要关注</strong>
+                <span>共比较 {comparison.summary.total} 个 {keyField}，{comparison.summary.unchanged} 个完全相同</span>
+              </p>
 
               {comparison.summary.issues ? (
                 <p className="issue-note">
                   有 {comparison.summary.duplicate} 个重复标识；旧文件 {comparison.emptyKeyRows.before} 行、新文件 {comparison.emptyKeyRows.after} 行缺少匹配值。请先修正这些数据再重新比较。
                 </p>
               ) : null}
-
-              <div className="candidate-guidance">
-                <strong>适合大量数据的查看方式</strong>
-                <span>每个 {keyField} 固定一行；先筛选和排序，再点击“查看”从右侧核对全部字段。</span>
-              </div>
 
               <div className="result-toolbar candidate-toolbar">
                 <div className="filter-tabs candidate-filter-tabs" role="group" aria-label="结果筛选">
@@ -717,7 +687,6 @@ export function TableDiffTool({ resultLayout = "classic" }: { resultLayout?: Res
 
               {paginatedEntries.length ? (
                 <>
-                  <p className="compact-scroll-hint">窄屏下可左右滑动表格查看全部列，右侧“查看”按钮会保持可见。</p>
                   <div className="compact-table-shell" aria-live="polite">
                   <div className="compact-table-scroll">
                     <div className="compact-result-table" role="table" aria-label="表格差异结果">

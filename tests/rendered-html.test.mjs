@@ -18,9 +18,9 @@ test("server-renders the table comparison tool", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>表格差异对比<\/title>/i);
-  assert.match(html, /两份文件，快速看清差异/);
-  assert.match(html, /载入虚构示例/);
-  assert.match(html, /文件只在当前浏览器中处理/);
+  assert.match(html, /表格差异对比/);
+  assert.match(html, /载入示例/);
+  assert.match(html, /本地处理 · 不上传文件/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|Your site is taking shape/i);
 });
 
@@ -29,5 +29,5 @@ test("keeps the original page and exposes the result-display candidate separatel
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>表格差异对比 · 结果展示候选版<\/title>/i);
-  assert.match(html, /两份文件，快速看清差异/);
+  assert.match(html, /表格差异对比/);
 });
